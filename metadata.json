@@ -1,0 +1,6 @@
+{
+  "name": "Unblocked Arcade",
+  "description": "Play popular unblocked games seamlessly with embedded iframe gaming, favorites, categories, and custom game support.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
