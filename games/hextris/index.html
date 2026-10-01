@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Hex Match Arcade</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #090d16;
+      color: #f8fafc;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 12px;
+      user-select: none;
+      touch-action: none;
+    }
+    .hud {
+      width: 100%;
+      max-width: 400px;
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 12px;
+      font-weight: 700;
+      font-size: 15px;
+    }
+    .hud span { color: #f43f5e; font-variant-numeric: tabular-nums; }
+    .box {
+      position: relative;
+      width: 100%;
+      max-width: 400px;
+      aspect-ratio: 1;
+      background: #0f172a;
+      border: 2px solid #334155;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 10px 30px rgba(244, 63, 94, 0.2);
+    }
+    canvas { width: 100%; height: 100%; display: block; }
+    .overlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(9, 13, 22, 0.88);
+      backdrop-filter: blur(4px);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+    }
+    .overlay.hidden { display: none; }
+    .overlay h2 { font-size: 26px; color: #f43f5e; font-weight: 800; }
+    .btn {
+      background: #f43f5e;
+      color: #fff;
+      border: none;
+      padding: 10px 24px;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .btn:hover { background: #e11d48; }
+    .rot-btns {
+      display: flex;
+      gap: 16px;
+      margin-top: 14px;
+    }
+    .rot-btn {
+      width: 70px;
+      height: 48px;
+      background: #1e293b;
+      border: 1px solid #475569;
+      color: #f8fafc;
+      border-radius: 8px;
+      font-size: 20px;
+      font-weight: bold;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .rot-btn:active { background: #f43f5e; }
+  </style>
+</head>
+<body>
+  <div class="hud">
+    <div>SCORE: <span id="score">0</span></div>
+    <div>HIGH: <span id="high">0</span></div>
+  </div>
+
+  <div class="box">
+    <canvas id="canvas" width="400" height="400"></canvas>
+    <div class="overlay" id="overlay">
+      <h2 id="title">HEX MATCH</h2>
+      <p id="msg" style="color:#94a3b8; font-size:13px;">Rotate hexagon to catch incoming colored blocks!</p>
+      <button class="btn" id="startBtn">PLAY NOW</button>
+    </div>
+  </div>
+
+  <div class="rot-btns">
+    <button class="rot-btn" onclick="rotateHex(-1)">↺</button>
+    <button class="rot-btn" onclick="rotateHex(1)">↻</button>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const scoreEl = document.getElementById('score');
+    const highEl = document.getElementById('high');
+    const overlay = document.getElementById('overlay');
+    const titleEl = document.getElementById('title');
+    const startBtn = document.getElementById('startBtn');
+
+    let highScore = parseInt(localStorage.getItem('hex_high') || '0', 10);
+    highEl.textContent = highScore;
+
+    // Web Audio Sound FX
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    function playBeep(f, dur = 0.08, type = 'sine') {
+      try {
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+        const osc = audioCtx.createOscillator();
+        const g = audioCtx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(f, audioCtx.currentTime);
+        g.gain.setValueAtTime(0.06, audioCtx.currentTime);
+        g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
+        osc.connect(g);
+        g.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + dur);
+      } catch (e) {}
+    }
+
+    const COLORS = ['#ef4444', '#3b82f6', '#10b981', '#f59e0b'];
+    let sides = [[], [], [], [], [], []]; // 6 sides of blocks
+    let incomingBlocks = [];
+    let hexAngle = 0;
+    let targetAngle = 0;
+    let score = 0;
+    let isRunning = false;
+    let animId = null;
+    let spawnTimer = 0;
+    let speed = 2.0;
+
+    const CENTER = 200;
+    const HEX_RADIUS = 40;
+    const BLOCK_THICKNESS = 14;
+
+    function init() {
+      sides = [[], [], [], [], [], []];
+      incomingBlocks = [];
+      hexAngle = 0;
+      targetAngle = 0;
+      score = 0;
+      speed = 2.0;
+      scoreEl.textContent = '0';
+      overlay.classList.add('hidden');
+      isRunning = true;
+      if (animId) cancelAnimationFrame(animId);
+      animId = requestAnimationFrame(loop);
+    }
+
+    function rotateHex(dir) {
+      if (!isRunning) return;
+      targetAngle += (dir * Math.PI) / 3;
+      playBeep(300, 0.04);
+    }
+
+    function spawnBlock() {
+      const side = Math.floor(Math.random() * 6);
+      const color = Math.floor(Math.random() * 4);
+      incomingBlocks.push({
+        side: side,
+        color: color,
+        dist: 190
+      });
+    }
+
+    function checkMatches() {
+      let matched = false;
+      for (let s = 0; s < 6; s++) {
+        const stack = sides[s];
+        if (stack.length >= 3) {
+          // Check for 3 consecutive matching colors
+          for (let i = 0; i <= stack.length - 3; i++) {
+            if (stack[i] === stack[i + 1] && stack[i] === stack[i + 2]) {
+              const count = 3;
+              stack.splice(i, 3);
+              score += 60;
+              scoreEl.textContent = score;
+              if (score > highScore) {
+                highScore = score;
+                highEl.textContent = highScore;
+                localStorage.setItem('hex_high', highScore);
+              }
+              playBeep(620, 0.15, 'triangle');
+              matched = true;
+              break;
+            }
+          }
+        }
+      }
+      return matched;
+    }
+
+    function update() {
+      if (!isRunning) return;
+
+      // Smooth hex rotation
+      hexAngle += (targetAngle - hexAngle) * 0.25;
+
+      spawnTimer++;
+      if (spawnTimer % 65 === 0) {
+        spawnBlock();
+        if (speed < 4.5) speed += 0.02;
+      }
+
+      // Update incoming blocks
+      for (let i = incomingBlocks.length - 1; i >= 0; i--) {
+        const b = incomingBlocks[i];
+        b.dist -= speed;
+
+        // Effective side calculation relative to hexagon angle
+        const relAngle = ((b.side * Math.PI) / 3 - hexAngle) % (Math.PI * 2);
+        let currentSide = Math.round((relAngle / (Math.PI / 3))) % 6;
+        if (currentSide < 0) currentSide += 6;
+
+        const stackHeight = sides[currentSide].length;
+        const collisionDist = HEX_RADIUS + stackHeight * BLOCK_THICKNESS + BLOCK_THICKNESS / 2;
+
+        if (b.dist <= collisionDist) {
+          if (stackHeight >= 7) {
+            return gameOver();
+          }
+          sides[currentSide].push(b.color);
+          incomingBlocks.splice(i, 1);
+          playBeep(220, 0.05);
+          checkMatches();
+        }
+      }
+    }
+
+    function draw() {
+      ctx.fillStyle = '#0f172a';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.save();
+      ctx.translate(CENTER, CENTER);
+
+      // Draw center rotating hexagon
+      ctx.save();
+      ctx.rotate(hexAngle);
+      ctx.strokeStyle = '#38bdf8';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      for (let i = 0; i < 6; i++) {
+        const a = (i * Math.PI) / 3;
+        const x = Math.cos(a) * HEX_RADIUS;
+        const y = Math.sin(a) * HEX_RADIUS;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+      ctx.stroke();
+
+      // Draw stacked blocks on sides
+      for (let s = 0; s < 6; s++) {
+        const stack = sides[s];
+        stack.forEach((colIdx, level) => {
+          ctx.save();
+          ctx.rotate((s * Math.PI) / 3);
+          ctx.fillStyle = COLORS[colIdx];
+          const dist = HEX_RADIUS + level * BLOCK_THICKNESS + BLOCK_THICKNESS / 2;
+          ctx.fillRect(-18, dist, 36, BLOCK_THICKNESS - 2);
+          ctx.restore();
+        });
+      }
+      ctx.restore();
+
+      // Draw incoming blocks in absolute frame
+      incomingBlocks.forEach(b => {
+        ctx.save();
+        ctx.rotate((b.side * Math.PI) / 3);
+        ctx.fillStyle = COLORS[b.color];
+        ctx.fillRect(-18, b.dist, 36, BLOCK_THICKNESS - 2);
+        ctx.restore();
+      });
+
+      ctx.restore();
+    }
+
+    function loop() {
+      update();
+      draw();
+      if (isRunning) animId = requestAnimationFrame(loop);
+    }
+
+    function gameOver() {
+      isRunning = false;
+      playBeep(140, 0.3, 'sawtooth');
+      titleEl.textContent = "GAME OVER";
+      startBtn.textContent = "PLAY AGAIN";
+      overlay.classList.remove('hidden');
+    }
+
+    window.addEventListener('keydown', e => {
+      if (e.code === 'ArrowLeft' || e.code === 'KeyA') { e.preventDefault(); rotateHex(-1); }
+      if (e.code === 'ArrowRight' || e.code === 'KeyD') { e.preventDefault(); rotateHex(1); }
+      if (e.code === 'Space' && !isRunning) init();
+    });
+
+    startBtn.onclick = init;
+    draw();
+  </script>
+</body>
+</html>
